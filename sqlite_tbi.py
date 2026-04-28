@@ -2,9 +2,6 @@
 This script creates SQLite Database and tables
 """
 
-# DB_PATH = '/home/vinzl/Documents/tbi_database.sqlite'
-# import os
-# os.remove(DB_PATH)
 import sqlite3
 import pandas as pd
 
@@ -28,9 +25,11 @@ class TBIDatabase:
                 ORStatusID INTEGER PRIMARY KEY,
                 Text TEXT
                 );
+                
+                
             CREATE TABLE IF NOT EXISTS patients (
                 PatientID INTEGER PRIMARY KEY,
-                BirthDate INTEGER,
+                BirthDate TEXT,
                 LastName TEXT,
                 FirstName TEXT,
                 gender_TextID INTEGER,
@@ -40,14 +39,16 @@ class TBIDatabase:
                 admission_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 PatientID INTEGER,
                 SocialSecurity TEXT,
-                LogicalUnitID INTEGER,
                 AdmissionDate TEXT,
-                ORStatus INTEGER,
+                LogicalUnitID INTEGER,
                 BedID INTEGER,
+                ORStatus INTEGER,
+                LocationFromTime TEXT,
                 FOREIGN KEY (PatientID) REFERENCES patients(PatientID),
-                FOREIGN KEY (ORStatus) REFERENCES orstatus_master(ORStatusID),
-                FOREIGN KEY (LogicalUnitID) REFERENCES icu_master(LogicalUnitID)
+                FOREIGN KEY (LogicalUnitID) REFERENCES icu_master(LogicalUnitID),
+                FOREIGN KEY (ORStatus) REFERENCES orstatus_master(ORStatusID)
                 );
+            
             CREATE TABLE IF NOT EXISTS gcs_score (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 PatientID INTEGER,
@@ -55,9 +56,10 @@ class TBIDatabase:
                 Value INTEGER,
                 FOREIGN KEY (PatientID) REFERENCES patients(PatientID)
                 );
+                
             CREATE TABLE IF NOT EXISTS register (
                 register_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                register_confirmed TEXT DEFAULT '',
+                register_confirmed TEXT,
                 PatientID INTEGER,
                 FOREIGN KEY (PatientID) REFERENCES patients(PatientID)
                 );
@@ -65,11 +67,16 @@ class TBIDatabase:
                 query_name TEXT PRIMARY KEY,
                 last_synced_at TEXT
                 );
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_admissions_key
-            ON admissions (PatientID, SocialSecurity, LogicalUnitID, AdmissionDate);
-
+                
+            
             CREATE UNIQUE INDEX IF NOT EXISTS ux_gcs_score_key
-            ON gcs_score (PatientID, TimeStamp, Value);
+            ON gcs_score (PatientID, TimeStamp);
+            
+            CREATE UNIQUE INDEX ux_admissions_key
+            ON admissions (PatientID, AdmissionDate);
+            
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_register_patient
+            ON register (PatientID);
         '''
 
     def get_connection(self):
@@ -78,10 +85,8 @@ class TBIDatabase:
         return conn
 
     def create_tables(self):
-        conn = self.get_connection()
-        conn.cursor().executescript(self._CREATE_TABLES)
-        conn.commit()
-        conn.close()
+        with self.get_connection() as conn:
+            conn.executescript(self._CREATE_TABLES)
 
     def query(self, sql: str):
         with self.get_connection() as conn:

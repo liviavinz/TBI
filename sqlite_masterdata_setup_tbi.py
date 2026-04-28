@@ -5,6 +5,7 @@ Run this script only once!
 
 import pandas as pd
 from tabulate import tabulate
+
 from connection_tbi import TBIConnection
 from sqlite_tbi import TBIDatabase
 
@@ -23,49 +24,47 @@ class TBIMasterSetup:
         self.tbi_con = TBIConnection()
 
     def fill_master_tables(self):
-        conn = self.sql_db.get_connection()
         master_tables = {
             "gender_master": TBIConnection.sql_gender_master,
             "icu_master":    TBIConnection.sql_icu_master,
         }
-        for table_name, query in master_tables.items():
-            df = self.tbi_con.get_data(query)
-            if df is not None and not df.empty:
-                conn.execute(f"DELETE FROM {table_name}")
-                conn.commit()
-                df.to_sql(table_name, conn, if_exists='append', index=False)
-                print(f"  {table_name}: {len(df)} rows inserted")
-            else:
-                print(f"  {table_name}: no data returned")
-        conn.close()
+        with self.sql_db.get_connection() as conn:
+            cur = conn.cursor()
+            for table_name, (query, pk_col) in master_tables.items():
+                df = self.tbi_con.get_data(query)
+                if df is not None and not df.empty:
+                    cols = list(df.columns)
+                    placeholders = ','.join('?' * len(cols))
+                    col_list = ','.join(cols)
+                    sql = f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})"
+                    cur.executemany(sql, df.to_records(index=False).tolist())
+                    conn.commit()
+                    print(f"  {table_name}: {len(df)} rows upserted")
+                else:
+                    print(f"  {table_name}: no data returned")
 
     def fill_orstatus_master(self):
-        conn = self.sql_db.get_connection()
-        cur  = conn.cursor()
-        cur.executemany(
-            "INSERT OR REPLACE INTO orstatus_master (ORStatusID, Text) VALUES (?, ?)",
-            self._ORSTATUS_DATA
-        )
-        conn.commit()
-        conn.close()
-        print("orstatus_master: filled manually")
+        with self.sql_db.get_connection() as conn:
+            conn.executemany(
+                "INSERT OR REPLACE INTO orstatus_master (ORStatusID, Text) VALUES (?, ?)",
+                self._ORSTATUS_DATA,
+            )
+        print(f"  orstatus_master: {len(self._ORSTATUS_DATA)} rows inserted")
 
     def show_tables(self):
-        conn = self.sql_db.get_connection()
-        cur  = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = cur.fetchall()
-        for table in tables:
-            table_name = table[0]
-            cur.execute(f"SELECT COUNT(*) FROM {table_name}")
-            count = cur.fetchone()[0]
-            print(f"  {table_name}: {count} rows")
-        conn.close()
+        with self.sql_db.get_connection() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = cur.fetchall()
+            print("\nTable overview:")
+            for (table_name,) in tables:
+                cur.execute(f"SELECT COUNT(*) FROM {table_name}")
+                count = cur.fetchone()[0]
+                print(f"  {table_name}: {count} rows")
 
     def show_table_data(self, table_name):
-        conn = self.sql_db.get_connection()
-        df   = pd.read_sql(f"SELECT * FROM {table_name}", conn)
-        conn.close()
+        with self.sql_db.get_connection() as conn:
+            df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
         print(f"\n--- {table_name} ---")
         print(tabulate(df, headers='keys', tablefmt='pretty', showindex=False))
 

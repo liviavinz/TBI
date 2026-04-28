@@ -3,7 +3,6 @@ This script contains the connection to the SQL Live-Database and all SQL-Queries
 """
 import pyodbc
 import pandas as pd
-from tabulate import tabulate
 import os
 import struct
 from datetime import datetime
@@ -60,7 +59,8 @@ class TBIConnection:
             BedID,
             BirthDate,
             LastName,
-            FirstName
+            FirstName,
+            LocationFromTime
         FROM dbo.DimPatient
     """
 
@@ -98,20 +98,35 @@ class TBIConnection:
             return None
 
     def get_data(self, query, patient_ids=None):
+        """
+        Execute SQL query and return results as a DataFrame
+        :param query: SQL query string
+        :param patient_ids: iterable of PatientIDs to filter by
+        :return: pandas DataFrame or None on failure
+        """
         conn = self.get_connection()
         if conn is None:
             return None
         try:
-            cursor = conn.cursor()
             if patient_ids:
-                placeholders = ','.join(str(pid) for pid in patient_ids)
-                query = f"{query} AND PatientID IN ({placeholders})"
+                ids = [int(pid) for pid in patient_ids]
+                if not ids:
+                    return pd.DataFrame()
+
+                placeholders = ','.join(str(pid) for pid in ids)
+
+                query = f"SELECT * FROM ({query}) AS sub WHERE PatientID IN ({placeholders})"
+
+            cursor = conn.cursor()
             cursor.execute(query)
             columns = [col[0] for col in cursor.description]
             rows = cursor.fetchall()
             return pd.DataFrame.from_records(rows, columns=columns)
+
         except pyodbc.Error as e:
             print(f"Query failed: {str(e)}")
             return None
         finally:
             conn.close()
+
+

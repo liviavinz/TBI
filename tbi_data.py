@@ -32,6 +32,7 @@ class TBIData:
                 p.LastName,
                 p.FirstName,
                 a.SocialSecurity,
+                a.AdmissionDate,
                 a.BedID,
                 i.Text AS ICU,
                 o.Text AS Status,
@@ -62,12 +63,23 @@ class TBIData:
     def _calculate_age(birthdate):
         if pd.isna(birthdate):
             return None
-        born = pd.Timestamp(str(birthdate)).date()
+        born = pd.to_datetime(birthdate).date()
         today = date.today()
         return today.year - born.year - (
                 (today.month, today.day) < (born.month, born.day)
         )
 
+    @staticmethod
+    def _format_dt(value, fmt="%d.%m.%Y %H:%M"):
+        """Format a datetime value, return empty string for missing values."""
+        if pd.isna(value):
+            return ""
+        try:
+            return pd.to_datetime(value).strftime(fmt)
+        except (ValueError, TypeError):
+            return ""
+
+    # ── Overview ───────────────────────────────────────────────────────────
     def _prepare_overview(self) -> pd.DataFrame:
         latest_gcs = (
             self.gcs_df.sort_values("TimeStamp")

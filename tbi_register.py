@@ -16,7 +16,10 @@ class TBIRegister:
         register = {}
         for _, row in df.iterrows():
             pid = str(row["PatientID"])
-            register[pid] = {"register_confirmed": row.get("register_confirmed", "")}
+            val = row["register_confirmed"]
+            register[pid] = {
+                "register_confirmed": val if pd.notna(val) else ""
+            }
         return register
 
     def save(self, register: dict):
@@ -26,25 +29,12 @@ class TBIRegister:
                 for pid, data in register.items():
                     register_confirmed = data.get("register_confirmed", "") or ""
 
-                    cursor.execute(
-                        "SELECT register_id FROM register WHERE PatientID = ?",
-                        (int(pid),)
-                    )
-                    existing = cursor.fetchone()
-
-                    if existing:
-                        # always update — allows clearing back to ""
-                        cursor.execute("""
-                            UPDATE register
-                            SET register_confirmed = ?
-                            WHERE PatientID = ?
-                        """, (register_confirmed, int(pid)))
-                    elif register_confirmed:
-                        # only insert if there's actually a value
-                        cursor.execute("""
-                            INSERT INTO register (register_confirmed, PatientID)
-                            VALUES (?, ?)
-                        """, (register_confirmed, int(pid)))
+                    cursor.execute("""
+                        INSERT INTO register (PatientID, register_confirmed)
+                        VALUES (?, ?)
+                        ON CONFLICT(PatientID) DO UPDATE SET
+                            register_confirmed = excluded.register_confirmed
+                    """, (int(pid), register_confirmed))
                 conn.commit()
         except Exception as e:
             print(f"ERROR in TBIRegister.save: {e}")

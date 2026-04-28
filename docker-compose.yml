@@ -1,0 +1,63 @@
+services:
+  dashboard:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+      target: dashboard
+      args:
+        USE_PROXY: "${USE_PROXY:-false}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+    container_name: tbi-dashboard
+    env_file:
+      - .env
+    environment:
+      SQLITE_DB_PATH: /data/tbi_database.sqlite
+      LOG_DIR: /logs
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+    ports:
+      - "8051:8051"
+    restart: unless-stopped
+
+  sync:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+      target: sync
+      args:
+        USE_PROXY: "${USE_PROXY:-false}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+    container_name: tbi-sync
+    env_file:
+      - .env
+    environment:
+      SQLITE_DB_PATH: /data/tbi_database.sqlite
+      LOG_DIR: /logs
+    volumes:
+      - ./data:/data        # gleiche SQLite-Datei wie dashboard!
+      - ./logs:/logs
+    restart: unless-stopped
+
+  setup:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+      target: setup
+      args:
+        USE_PROXY: "${USE_PROXY:-false}"
+        HTTP_PROXY: "${HTTP_PROXY:-}"
+        HTTPS_PROXY: "${HTTPS_PROXY:-}"
+        NO_PROXY: "${NO_PROXY:-}"
+    env_file:
+      - .env
+    environment:
+      SQLITE_DB_PATH: /data/tbi_database.sqlite
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
+    profiles: ["tools"]

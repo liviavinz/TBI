@@ -1,0 +1,6 @@
+dash
+dash-ag-grid
+pandas
+pyodbc
+python-dotenv
+tabulate

@@ -37,7 +37,9 @@ class TBISync:
         last_synced = self._get_last_synced(query_name)
         if last_synced:
             cutoff = datetime.fromisoformat(last_synced) - timedelta(minutes=self.OVERLAP_MIN)
-            sql = f"{sql} AND TimeStamp > '{cutoff}'"
+            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+            # Subquery wrap: works regardless of WHERE/OR in original query
+            sql = f"SELECT * FROM ({sql}) AS sub WHERE TimeStamp > '{cutoff_str}'"
             print(f"  [{query_name}] incremental since {cutoff}")
         else:
             print(f"  [{query_name}] first run — full load")
@@ -74,7 +76,7 @@ class TBISync:
         self.cur  = self.conn.cursor()
         print("  SQLite ready")
 
-    # ── Step 3: insert patients & admissions ──────────────────────────────
+    # ── Step 3: insert patients & upsert admissions ───────────────────────
     def _insert_patients(self, patient_ids):
         print("\nSTEP 3: inserting patients & admissions...")
         df_patient = self.tbi_con.get_data(TBIConnection.sql_patient)
@@ -92,50 +94,58 @@ class TBISync:
             how='left',
         )
 
-        new_patient_count   = 0
-        new_admission_count = 0
+        new_patient_count        = 0
+        upserted_admission_count = 0
 
         for _, row in df_patient.iterrows():
-            patient_id = row['PatientID']
-            birthdate  = str(row['BirthDate'])      if pd.notna(row['BirthDate'])      else None
-            gender     = int(row['gender_TextID'])  if pd.notna(row['gender_TextID'])  else None
-            ssn        = str(row['SocialSecurity']) if pd.notna(row['SocialSecurity']) else None
-            adm_date   = str(row['AddmissionDate']) if pd.notna(row['AddmissionDate']) else None
-            logical    = int(row['LogicalUnitID'])  if pd.notna(row['LogicalUnitID'])  else None
-            or_status  = int(row['ORStatus'])       if pd.notna(row['ORStatus'])       else None
-            bed_id     = int(row['BedID'])          if pd.notna(row['BedID'])          else None
-            last_name  = str(row['LastName'])       if pd.notna(row['LastName'])       else None
-            first_name = str(row['FirstName'])      if pd.notna(row['FirstName'])      else None
+            patient_id    = row['PatientID']
+            birthdate     = str(row['BirthDate'])        if pd.notna(row['BirthDate'])        else None
+            gender        = int(row['gender_TextID'])    if pd.notna(row['gender_TextID'])    else None
+            ssn           = str(row['SocialSecurity'])   if pd.notna(row['SocialSecurity'])   else None
+            adm_date      = str(row['AddmissionDate'])   if pd.notna(row['AddmissionDate'])   else None
+            logical       = int(row['LogicalUnitID'])    if pd.notna(row['LogicalUnitID'])    else None
+            or_status     = int(row['ORStatus'])         if pd.notna(row['ORStatus'])         else None
+            bed_id        = int(row['BedID'])            if pd.notna(row['BedID'])            else None
+            last_name     = str(row['LastName'])         if pd.notna(row['LastName'])         else None
+            first_name    = str(row['FirstName'])        if pd.notna(row['FirstName'])        else None
+            location_from = str(row['LocationFromTime']) if pd.notna(row['LocationFromTime']) else None
 
-            # INSERT into patients (PatientID is PRIMARY KEY → OR IGNORE is enough)
+            # patients: stays the same → INSERT OR IGNORE
             self.cur.execute("""
-                INSERT OR IGNORE INTO patients (PatientID, BirthDate, LastName, FirstName, gender_TextID)
+                INSERT OR IGNORE INTO patients
+                    (PatientID, BirthDate, LastName, FirstName, gender_TextID)
                 VALUES (?, ?, ?, ?, ?)
             """, (patient_id, birthdate, last_name, first_name, gender))
             if self.cur.rowcount > 0:
                 new_patient_count += 1
 
-            # INSERT into admissions (unique index on PatientID, SSN, ICU, AdmissionDate)
+            # admissions: location can change → UPSERT (insert or update on conflict)
             self.cur.execute("""
-                INSERT OR IGNORE INTO admissions
-                    (PatientID, SocialSecurity, AdmissionDate, LogicalUnitID, ORStatus, BedID)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (patient_id, ssn, adm_date, logical, or_status, bed_id))
-            if self.cur.rowcount > 0:
-                new_admission_count += 1
+                INSERT INTO admissions
+                    (PatientID, SocialSecurity, AdmissionDate,
+                     LogicalUnitID, BedID, ORStatus, LocationFromTime)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(PatientID, AdmissionDate) DO UPDATE SET
+                    SocialSecurity   = excluded.SocialSecurity,
+                    LogicalUnitID    = excluded.LogicalUnitID,
+                    BedID            = excluded.BedID,
+                    ORStatus         = excluded.ORStatus,
+                    LocationFromTime = excluded.LocationFromTime
+            """, (patient_id, ssn, adm_date, logical, bed_id, or_status, location_from))
+            upserted_admission_count += 1
 
         self.conn.commit()
         print(f"  {len(df_patient)} patient rows processed")
         print(f"  {new_patient_count} new patients inserted")
-        print(f"  {new_admission_count} new admissions inserted")
+        print(f"  {upserted_admission_count} admissions upserted")
 
-    # ── Steps 4-6: transactional data ─────────────────────────────────────
+    # ── Steps 4-6: transactional data (GCS) ───────────────────────────────
     def _sync_gcs(self, patient_ids):
-        print("\nSTEP 4: fetching transactional data...")
+        print("\nSTEP 4: fetching GCS data...")
         df_gcs = self._fetch_incremental(TBIConnection.sql_gcs, "gcs", patient_ids)
         print(f"  → gcs rows fetched: {len(df_gcs)}")
 
-        print("\nSTEP 5: inserting transactional data...")
+        print("\nSTEP 5: inserting GCS data...")
         inserted_gcs = 0
         for _, row in df_gcs.iterrows():
             self.cur.execute("""
@@ -154,6 +164,11 @@ class TBISync:
         if not df_gcs.empty:
             self._set_last_synced("gcs", str(df_gcs['TimeStamp'].max()))
             print(f"  gcs synced to {df_gcs['TimeStamp'].max()}")
+        else:
+            # advance cursor anyway to avoid re-querying the same empty range
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._set_last_synced("gcs", now_str)
+            print(f"  no new gcs rows, advanced cursor to {now_str}")
         self.conn.commit()
 
     # ── Main run ───────────────────────────────────────────────────────────
