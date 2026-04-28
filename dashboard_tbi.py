@@ -129,7 +129,10 @@ def serve_layout():
                 id="patient-table",
                 rowData=table_data,
                 columnDefs=PATIENT_COLDEFS,
-                defaultColDef={"sortable": True, "resizable": True, "floatingFilter": True, "filter": True},
+                defaultColDef={
+                    "sortable": True, "resizable": True, "floatingFilter": True, "filter": True,
+                    "filterParams": {"defaultOption": "startsWith", "filterOptions": ["startsWith"]},
+                },
                 dashGridOptions={
                     "animateRows": True,
                     "rowSelection": "single",
@@ -142,6 +145,7 @@ def serve_layout():
                     "overflowX": "scroll",
                 },
             ),
+
 
             # ── Register table ─────────────────────────────────────────────
             html.H3("Patientenregister",
@@ -209,4 +213,4 @@ def update_kpi_registered(reg):
 
 
 if __name__ == "__main__":
-    app.run(debug=True, use_reloader=False, host="0.0.0.0", port=8051)
+    app.run(debug=False, use_reloader=False, host="0.0.0.0", port=8051)

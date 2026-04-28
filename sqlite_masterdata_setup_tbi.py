@@ -30,7 +30,7 @@ class TBIMasterSetup:
         }
         with self.sql_db.get_connection() as conn:
             cur = conn.cursor()
-            for table_name, (query, pk_col) in master_tables.items():
+            for table_name, query in master_tables.items():
                 df = self.tbi_con.get_data(query)
                 if df is not None and not df.empty:
                     cols = list(df.columns)
