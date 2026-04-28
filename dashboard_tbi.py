@@ -2,7 +2,7 @@
 SHT Monitoring Dashboard
 """
 import dash_ag_grid as dag
-from dash import Dash, html, dcc, Input, Output, State
+from dash import Dash, html, dcc, Input, Output, State, callback_context
 
 from sqlite_tbi import TBIDatabase
 from tbi_data import TBIData
@@ -44,16 +44,26 @@ app = Dash(__name__)
 
 # ── Column definitions ────────────────────────────────────────────────────────
 PATIENT_COLDEFS = [
-    {"headerName": "Patienten ID",    "field": "PatientID",      "filter": "agNumberColumnFilter"},
-    {"headerName": "Fallnummer",      "field": "SocialSecurity", "filter": "agTextColumnFilter"},
-    {"headerName": "Nachname",        "field": "LastName",       "filter": "agTextColumnFilter"},
-    {"headerName": "Vorname",         "field": "FirstName",      "filter": "agTextColumnFilter"},
-    {"headerName": "Alter",           "field": "Age",            "filter": "agNumberColumnFilter"},
-    {"headerName": "Geschlecht",      "field": "Gender",         "filter": "agTextColumnFilter"},
-    {"headerName": "Bett ID",         "field": "BedID",          "filter": "agNumberColumnFilter"},
-    {"headerName": "Intensivstation", "field": "ICU",            "filter": "agTextColumnFilter"},
-    {"headerName": "Status",          "field": "Status",         "filter": "agSetColumnFilter"},
-    {"headerName": "GCS (aktuell)",   "field": "gcs_display",    "filter": "agTextColumnFilter"},
+    {"headerName": "Patienten ID", "field": "PatientID", "filter": "agTextColumnFilter"},
+    {"headerName": "Nachname",        "field": "LastName",        "filter": "agTextColumnFilter"},
+    {"headerName": "Vorname",         "field": "FirstName",       "filter": "agTextColumnFilter"},
+    {
+        "headerName": "Alter",
+        "field": "Age",
+        "filter": "agNumberColumnFilter",
+        "filterParams": {
+            "defaultOption": "equals",
+            "filterOptions": ["equals", "notEqual", "lessThan", "lessThanOrEqual",
+                              "greaterThan", "greaterThanOrEqual", "inRange"],
+        },
+    },
+    {"headerName": "Geschlecht", "field": "Gender", "filter": "agTextColumnFilter"},
+    {"headerName": "GCS (aktuell)", "field": "gcs_display", "filter": "agTextColumnFilter"},
+    {"headerName": "Bett ID",         "field": "BedID",           "filter": "agTextColumnFilter"},
+    {"headerName": "Fallnummer",      "field": "SocialSecurity",  "filter": "agTextColumnFilter"},
+    {"headerName": "Intensivstation", "field": "ICU",             "filter": "agTextColumnFilter"},
+    {"headerName": "Status",          "field": "Status",          "filter": "agTextColumnFilter"},
+
     {
         "headerName": "Registriert",
         "field": "Registered",
@@ -67,21 +77,38 @@ PATIENT_COLDEFS = [
 ]
 
 REGISTER_COLDEFS = [
-    {"headerName": "Patienten ID", "field": "PatientID",      "filter": "agNumberColumnFilter"},
-    {"headerName": "Fallnummer",   "field": "SocialSecurity", "filter": "agTextColumnFilter"},
-    {"headerName": "Nachname",     "field": "LastName",       "filter": "agTextColumnFilter"},
-    {"headerName": "Vorname",      "field": "FirstName",      "filter": "agTextColumnFilter"},
-    {"headerName": "Alter",        "field": "Age",            "filter": "agNumberColumnFilter"},
-    {"headerName": "Geschlecht",   "field": "Gender",         "filter": "agTextColumnFilter"},
+    {"headerName": "Nachname",     "field": "LastName",       "filter": "agTextColumnFilter", "flex": 2},
+    {"headerName": "Vorname",      "field": "FirstName",      "filter": "agTextColumnFilter", "flex": 2},
+    {
+        "headerName": "Alter",
+        "field": "Age",
+        "filter": "agNumberColumnFilter",
+        "filterParams": {
+            "defaultOption": "equals",
+            "filterOptions": ["equals", "notEqual", "lessThan", "lessThanOrEqual",
+                              "greaterThan", "greaterThanOrEqual", "inRange"], "flex": 1
+        },
+    },
+    {"headerName": "Patienten ID", "field": "PatientID",      "filter": "agTextColumnFilter", "flex": 2},
+    {"headerName": "Fallnummer",   "field": "SocialSecurity", "filter": "agTextColumnFilter", "flex": 2},
+    {
+        "headerName": "Registriert",
+        "field": "Registered",
+        "filter": "agTextColumnFilter",
+        "editable": True,
+        "cellEditor": "agSelectCellEditor",
+        "cellEditorParams": {"values": ["", "Ja", "Nein"]},
+        "cellStyle": {"cursor": "pointer"},
+        "flex": 1,
+    },
 ]
-
 
 # ── Layout ────────────────────────────────────────────────────────────────────
 def serve_layout():
     reg = register.load()
     overview, n_patients = _build_overview_with_register(reg)
 
-    table_data      = overview.to_dict("records")
+    table_data = overview[overview["Registered"] != "Ja"].to_dict("records")
     registered_data = overview[overview["Registered"] == "Ja"].to_dict("records")
     registered_count = sum(
         1 for d in reg.values() if d.get("register_confirmed") == "Ja"
@@ -155,7 +182,7 @@ def serve_layout():
                 rowData=registered_data,
                 columnDefs=REGISTER_COLDEFS,
                 defaultColDef={"sortable": True, "resizable": True, "floatingFilter": True, "filter": True},
-                dashGridOptions={"animateRows": True},
+                dashGridOptions={"animateRows": True, "rowSelection": "single", "singleClickEdit": True},
                 style={"height": "300px", "overflowY": "auto", "marginBottom": "30px"},
             ),
         ],
@@ -175,20 +202,42 @@ app.layout = serve_layout
 def refresh_tables(_, reg):
     """Refresh both tables and the total-patient KPI from fresh DB data."""
     overview, n_patients = _build_overview_with_register(reg or {})
-    table_data      = overview.to_dict("records")
+
+    # Patientenübersicht: alle, die NICHT "Ja" sind (also "" oder "Nein")
+    table_data = overview[overview["Registered"] != "Ja"].to_dict("records")
+
+    # Patientenregister: alle, die "Ja" sind
     registered_data = overview[overview["Registered"] == "Ja"].to_dict("records")
+
     return table_data, registered_data, str(n_patients)
 
 
 @app.callback(
     Output("register-store", "data"),
     Input("patient-table", "cellValueChanged"),
+    Input("registered-table", "cellValueChanged"),
     State("register-store", "data"),
     prevent_initial_call=True,
 )
-def save_registered(cell_changed, current_register):
+def save_registered(patient_changed, registered_changed, current_register):
+    """Save register-state from either table."""
+    ctx = callback_context
+    if not ctx.triggered:
+        return current_register
+
+    # Welche Tabelle hat getriggert?
+    triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
+
+    if triggered_id == "patient-table":
+        cell_changed = patient_changed
+    elif triggered_id == "registered-table":
+        cell_changed = registered_changed
+    else:
+        return current_register
+
     if not cell_changed or cell_changed[0].get("colId") != "Registered":
         return current_register
+
     reg = dict(current_register) if current_register else {}
     pid = str(cell_changed[0]["data"].get("PatientID", ""))
     val = cell_changed[0]["data"].get("Registered", "")
