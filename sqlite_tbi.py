@@ -1,16 +1,20 @@
 """
 This script creates SQLite Database and tables
 """
-
+import os
 import sqlite3
 import pandas as pd
+from pathlib import Path
 
 class TBIDatabase:
     """
     - SQLite create Tables
     - functions to connect with DB SQlite, create tables and queries
     """
-    DB_PATH = '/home/vinzl/Documents/tbi_database.sqlite'
+    DB_PATH = os.getenv(
+        "SQLITE_DB_PATH",
+        str(Path(__file__).parent / "data" / "tbi_database.sqlite")
+    )
 
     _CREATE_TABLES = '''
             CREATE TABLE IF NOT EXISTS icu_master (
@@ -80,6 +84,7 @@ class TBIDatabase:
         '''
 
     def get_connection(self):
+        Path(self.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.DB_PATH)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
