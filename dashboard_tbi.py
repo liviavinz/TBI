@@ -35,8 +35,8 @@ KPI_STYLE = {
     "boxShadow": "0 2px 6px rgba(0,0,0,0.1)",
     "minWidth": "160px",
 }
-REGISTERED_KPI_STYLE = {**KPI_STYLE, "background": "#e5ffe5"}
-
+INCLUDED_KPI_STYLE = {**KPI_STYLE, "background": "#e5ffe5"}
+EXCLUDED_KPI_STYLE = {**KPI_STYLE, "background": "#ffe5e5"}
 
 # ── App ───────────────────────────────────────────────────────────────────────
 app = Dash(__name__)
@@ -44,9 +44,14 @@ app = Dash(__name__)
 
 # ── Column definitions ────────────────────────────────────────────────────────
 PATIENT_COLDEFS = [
-    {"headerName": "Patienten ID", "field": "PatientID", "filter": "agTextColumnFilter"},
+    {"headerName": "Intensivstation", "field": "ICU",             "filter": "agTextColumnFilter"},
     {"headerName": "Nachname",        "field": "LastName",        "filter": "agTextColumnFilter"},
     {"headerName": "Vorname",         "field": "FirstName",       "filter": "agTextColumnFilter"},
+    {"headerName": "Fallnummer", "field": "SocialSecurity", "filter": "agTextColumnFilter"},
+    {"headerName": "Bett ID", "field": "BedID", "filter": "agTextColumnFilter"},
+    {"headerName": "Status", "field": "Status", "filter": "agTextColumnFilter"},
+
+    {"headerName": "Patienten ID", "field": "PatientID", "filter": "agTextColumnFilter"},
     {
         "headerName": "Alter",
         "field": "Age",
@@ -59,10 +64,6 @@ PATIENT_COLDEFS = [
     },
     {"headerName": "Geschlecht", "field": "Gender", "filter": "agTextColumnFilter"},
     {"headerName": "GCS (aktuell)", "field": "gcs_display", "filter": "agTextColumnFilter"},
-    {"headerName": "Bett ID",         "field": "BedID",           "filter": "agTextColumnFilter"},
-    {"headerName": "Fallnummer",      "field": "SocialSecurity",  "filter": "agTextColumnFilter"},
-    {"headerName": "Intensivstation", "field": "ICU",             "filter": "agTextColumnFilter"},
-    {"headerName": "Status",          "field": "Status",          "filter": "agTextColumnFilter"},
 
     {
         "headerName": "Registriert",
@@ -76,21 +77,11 @@ PATIENT_COLDEFS = [
     },
 ]
 
-REGISTER_COLDEFS = [
+DECIDED_COLDEFS = [
+    {"headerName": "Patienten ID", "field": "PatientID", "filter": "agTextColumnFilter", "flex": 2},
+    {"headerName": "Fallnummer", "field": "SocialSecurity", "filter": "agTextColumnFilter", "flex": 2},
     {"headerName": "Nachname",     "field": "LastName",       "filter": "agTextColumnFilter", "flex": 2},
     {"headerName": "Vorname",      "field": "FirstName",      "filter": "agTextColumnFilter", "flex": 2},
-    {
-        "headerName": "Alter",
-        "field": "Age",
-        "filter": "agNumberColumnFilter",
-        "filterParams": {
-            "defaultOption": "equals",
-            "filterOptions": ["equals", "notEqual", "lessThan", "lessThanOrEqual",
-                              "greaterThan", "greaterThanOrEqual", "inRange"], "flex": 1
-        },
-    },
-    {"headerName": "Patienten ID", "field": "PatientID",      "filter": "agTextColumnFilter", "flex": 2},
-    {"headerName": "Fallnummer",   "field": "SocialSecurity", "filter": "agTextColumnFilter", "flex": 2},
     {
         "headerName": "Registriert",
         "field": "Registered",
@@ -106,13 +97,15 @@ REGISTER_COLDEFS = [
 # ── Layout ────────────────────────────────────────────────────────────────────
 def serve_layout():
     reg = register.load()
-    overview, n_patients = _build_overview_with_register(reg)
+    overview, _ = _build_overview_with_register(reg)
 
-    table_data = overview[overview["Registered"] != "Ja"].to_dict("records")
-    registered_data = overview[overview["Registered"] == "Ja"].to_dict("records")
-    registered_count = sum(
-        1 for d in reg.values() if d.get("register_confirmed") == "Ja"
-    )
+    pending_data  = overview[overview["Registered"] == ""].to_dict("records")
+    included_data = overview[overview["Registered"] == "Ja"].to_dict("records")
+    excluded_data = overview[overview["Registered"] == "Nein"].to_dict("records")
+
+    pending_count  = len(pending_data)
+    included_count = len(included_data)
+    excluded_count = len(excluded_data)
 
     return html.Div(
         style={"fontFamily": "Arial", "padding": "24px", "maxWidth": "1600px", "margin": "0 auto"},
@@ -136,25 +129,39 @@ def serve_layout():
                 style={"display": "flex", "gap": "20px", "justifyContent": "center", "marginBottom": "36px"},
                 children=[
                     html.Div(
-                        [html.H2(str(n_patients), id="kpi-total", style={"margin": 0}),
-                         html.P("Total SHT Patienten", style={"margin": 0})],
+                        [html.H2(str(pending_count), id="kpi-pending", style={"margin": 0}),
+                         html.P("Aktuelle Patient:innen", style={"margin": 0})],
                         style=KPI_STYLE,
                     ),
                     html.Div(
-                        [html.H2(str(registered_count), id="kpi-registered",
+                        [html.H2(str(included_count), id="kpi-included",
                                  style={"margin": 0, "color": "#27ae60"}),
-                         html.P("Registriert", style={"margin": 0})],
-                        style=REGISTERED_KPI_STYLE,
+                         html.P("Eingeschlossen", style={"margin": 0})],
+                        style=INCLUDED_KPI_STYLE,
+                    ),
+                    html.Div(
+                        [html.H2(str(excluded_count), id="kpi-excluded",
+                                 style={"margin": 0, "color": "#c0392b"}),
+                         html.P("Nicht eingeschlossen", style={"margin": 0})],
+                        style=EXCLUDED_KPI_STYLE,
                     ),
                 ],
             ),
 
-            # ── Patient table ──────────────────────────────────────────────
-            html.H2("Patientenübersicht",
-                    style={"borderBottom": "2px solid #ddd", "paddingBottom": "6px"}),
+            # ── Table 1: Aktuelle Patient:innen ───────────────────────────
+            html.H2(
+                children=[
+                    "Aktuelle Patient:innen ",
+                    html.Span(
+                        "(Diagnose: Schädel-Hirn-Trauma (T1), Consent = ja, Station = IFI)",
+                        style={"fontSize": "0.6em", "color": "#666", "fontWeight": "normal"},
+                    ),
+                ],
+                style={"borderBottom": "2px solid #ddd", "paddingBottom": "6px"},
+            ),
             dag.AgGrid(
-                id="patient-table",
-                rowData=table_data,
+                id="pending-table",
+                rowData=pending_data,
                 columnDefs=PATIENT_COLDEFS,
                 defaultColDef={
                     "sortable": True, "resizable": True, "floatingFilter": True, "filter": True,
@@ -173,14 +180,41 @@ def serve_layout():
                 },
             ),
 
-
-            # ── Register table ─────────────────────────────────────────────
-            html.H3("Patientenregister",
-                    style={"borderBottom": "2px solid #ddd", "paddingBottom": "6px"}),
+            # ── Table 2: Eingeschlossene Patient:innen ────────────────────
+            html.H3(
+                children=[
+                    "Eingeschlossene Patient:innen ",
+                    html.Span(
+                        "(Registriert = Ja)",
+                        style={"fontSize": "0.7em", "color": "#666", "fontWeight": "normal"},
+                    ),
+                ],
+                style={"borderBottom": "2px solid #27ae60", "paddingBottom": "6px"},
+            ),
             dag.AgGrid(
-                id="registered-table",
-                rowData=registered_data,
-                columnDefs=REGISTER_COLDEFS,
+                id="included-table",
+                rowData=included_data,
+                columnDefs=DECIDED_COLDEFS,
+                defaultColDef={"sortable": True, "resizable": True, "floatingFilter": True, "filter": True},
+                dashGridOptions={"animateRows": True, "rowSelection": "single", "singleClickEdit": True},
+                style={"height": "300px", "overflowY": "auto", "marginBottom": "30px"},
+            ),
+
+            # ── Table 3: Nicht eingeschlossene Patient:innen ──────────────
+            html.H3(
+                children=[
+                    "Nicht eingeschlossene Patient:innen ",
+                    html.Span(
+                        "(Registriert = Nein)",
+                        style={"fontSize": "0.7em", "color": "#666", "fontWeight": "normal"},
+                    ),
+                ],
+                style={"borderBottom": "2px solid #c0392b", "paddingBottom": "6px"},
+            ),
+            dag.AgGrid(
+                id="excluded-table",
+                rowData=excluded_data,
+                columnDefs=DECIDED_COLDEFS,
                 defaultColDef={"sortable": True, "resizable": True, "floatingFilter": True, "filter": True},
                 dashGridOptions={"animateRows": True, "rowSelection": "single", "singleClickEdit": True},
                 style={"height": "300px", "overflowY": "auto", "marginBottom": "30px"},
@@ -193,47 +227,54 @@ app.layout = serve_layout
 
 # ── Callbacks ─────────────────────────────────────────────────────────────────
 @app.callback(
-    Output("patient-table",    "rowData"),
-    Output("registered-table", "rowData"),
-    Output("kpi-total",        "children"),
+    Output("pending-table",  "rowData"),
+    Output("included-table", "rowData"),
+    Output("excluded-table", "rowData"),
+    Output("kpi-pending",    "children"),
+    Output("kpi-included",   "children"),
+    Output("kpi-excluded",   "children"),
     Input("data-refresh-interval", "n_intervals"),
     Input("register-store", "data"),
 )
 def refresh_tables(_, reg):
-    """Refresh both tables and the total-patient KPI from fresh DB data."""
-    overview, n_patients = _build_overview_with_register(reg or {})
+    """Refresh all three tables and KPIs from fresh DB data."""
+    overview, _ = _build_overview_with_register(reg or {})
 
-    # Patientenübersicht: alle, die NICHT "Ja" sind (also "" oder "Nein")
-    table_data = overview[overview["Registered"] != "Ja"].to_dict("records")
+    pending_data  = overview[overview["Registered"] == ""].to_dict("records")
+    included_data = overview[overview["Registered"] == "Ja"].to_dict("records")
+    excluded_data = overview[overview["Registered"] == "Nein"].to_dict("records")
 
-    # Patientenregister: alle, die "Ja" sind
-    registered_data = overview[overview["Registered"] == "Ja"].to_dict("records")
-
-    return table_data, registered_data, str(n_patients)
+    return (
+        pending_data,
+        included_data,
+        excluded_data,
+        str(len(pending_data)),
+        str(len(included_data)),
+        str(len(excluded_data)),
+    )
 
 
 @app.callback(
     Output("register-store", "data"),
-    Input("patient-table", "cellValueChanged"),
-    Input("registered-table", "cellValueChanged"),
+    Input("pending-table",  "cellValueChanged"),
+    Input("included-table", "cellValueChanged"),
+    Input("excluded-table", "cellValueChanged"),
     State("register-store", "data"),
     prevent_initial_call=True,
 )
-def save_registered(patient_changed, registered_changed, current_register):
-    """Save register-state from either table."""
+def save_registered(pending_changed, included_changed, excluded_changed, current_register):
+    """Save register-state from any of the three tables."""
     ctx = callback_context
     if not ctx.triggered:
         return current_register
 
-    # Welche Tabelle hat getriggert?
     triggered_id = ctx.triggered[0]["prop_id"].split(".")[0]
 
-    if triggered_id == "patient-table":
-        cell_changed = patient_changed
-    elif triggered_id == "registered-table":
-        cell_changed = registered_changed
-    else:
-        return current_register
+    cell_changed = {
+        "pending-table":  pending_changed,
+        "included-table": included_changed,
+        "excluded-table": excluded_changed,
+    }.get(triggered_id)
 
     if not cell_changed or cell_changed[0].get("colId") != "Registered":
         return current_register
@@ -246,19 +287,6 @@ def save_registered(patient_changed, registered_changed, current_register):
     reg[pid] = entry
     register.save(reg)
     return reg
-
-
-@app.callback(
-    Output("kpi-registered", "children"),
-    Input("register-store", "data"),
-)
-def update_kpi_registered(reg):
-    if not reg:
-        return "0"
-    count = sum(
-        1 for d in reg.values() if d.get("register_confirmed") == "Ja"
-    )
-    return str(count)
 
 
 if __name__ == "__main__":
