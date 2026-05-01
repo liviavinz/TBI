@@ -17,7 +17,7 @@ services:
     volumes:
       - ./data:/data
       - ./logs:/logs
-    profiles: ["tools"]   # only runs when explicitly requested
+    restart: "no"
 
   sync:
     build:
@@ -38,6 +38,9 @@ services:
       - ./data:/data
       - ./logs:/logs
     restart: unless-stopped
+    depends_on:
+      setup:
+        condition: service_completed_successfully
 
   dashboard:
     build:
@@ -61,4 +64,7 @@ services:
       - "8051:8051"
     restart: unless-stopped
     depends_on:
-      - sync
+      setup:
+        condition: service_completed_successfully
+      sync:
+        condition: service_started

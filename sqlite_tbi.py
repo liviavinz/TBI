@@ -76,7 +76,7 @@ class TBIDatabase:
             CREATE UNIQUE INDEX IF NOT EXISTS ux_gcs_score_key
             ON gcs_score (PatientID, TimeStamp);
             
-            CREATE UNIQUE INDEX ux_admissions_key
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_admissions_key
             ON admissions (PatientID, AdmissionDate);
             
             CREATE UNIQUE INDEX IF NOT EXISTS ux_register_patient
