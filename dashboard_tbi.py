@@ -130,7 +130,7 @@ def serve_layout():
                 children=[
                     html.Div(
                         [html.H2(str(pending_count), id="kpi-pending", style={"margin": 0}),
-                         html.P("Aktuelle Patient:innen", style={"margin": 0})],
+                         html.P("Aktuelle Patienten", style={"margin": 0})],
                         style=KPI_STYLE,
                     ),
                     html.Div(
@@ -148,10 +148,10 @@ def serve_layout():
                 ],
             ),
 
-            # ── Table 1: Aktuelle Patient:innen ───────────────────────────
+            # ── Table 1: Aktuelle Patienten ───────────────────────────
             html.H2(
                 children=[
-                    "Aktuelle Patient:innen ",
+                    "Aktuelle Patienten ",
                     html.Span(
                         "(Diagnose: Schädel-Hirn-Trauma (T1), Consent = ja, Station = IFI)",
                         style={"fontSize": "0.6em", "color": "#666", "fontWeight": "normal"},
@@ -180,10 +180,10 @@ def serve_layout():
                 },
             ),
 
-            # ── Table 2: Eingeschlossene Patient:innen ────────────────────
+            # ── Table 2: Eingeschlossene Patienten ────────────────────
             html.H3(
                 children=[
-                    "Eingeschlossene Patient:innen ",
+                    "Eingeschlossene Patienten ",
                     html.Span(
                         "(Registriert = Ja)",
                         style={"fontSize": "0.7em", "color": "#666", "fontWeight": "normal"},
@@ -200,10 +200,10 @@ def serve_layout():
                 style={"height": "300px", "overflowY": "auto", "marginBottom": "30px"},
             ),
 
-            # ── Table 3: Nicht eingeschlossene Patient:innen ──────────────
+            # ── Table 3: Nicht eingeschlossene Patienten ──────────────
             html.H3(
                 children=[
-                    "Nicht eingeschlossene Patient:innen ",
+                    "Nicht eingeschlossene Patienten ",
                     html.Span(
                         "(Registriert = Nein)",
                         style={"fontSize": "0.7em", "color": "#666", "fontWeight": "normal"},
