@@ -21,12 +21,16 @@ class TBIDatabase:
                 LogicalUnitID INTEGER PRIMARY KEY,
                 Text TEXT
                 );
-            CREATE TABLE IF NOT EXISTS gender_master (
-                TextID INTEGER PRIMARY KEY,
-                Text TEXT
-                );
             CREATE TABLE IF NOT EXISTS orstatus_master (
                 ORStatusID INTEGER PRIMARY KEY,
+                Text TEXT
+                );
+            CREATE TABLE IF NOT EXISTS g_consent_master (
+                TextID INTEGER PRIMARY KEY, 
+                Text TEXT
+                );
+            CREATE TABLE IF NOT EXISTS ifi_consent_master (
+                TextID INTEGER PRIMARY KEY, 
                 Text TEXT
                 );
                 
@@ -36,8 +40,6 @@ class TBIDatabase:
                 BirthDate TEXT,
                 LastName TEXT,
                 FirstName TEXT,
-                gender_TextID INTEGER,
-                FOREIGN KEY (gender_TextID) REFERENCES gender_master(TextID)
                 );
             CREATE TABLE IF NOT EXISTS admissions (
                 admission_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,6 +54,15 @@ class TBIDatabase:
                 FOREIGN KEY (LogicalUnitID) REFERENCES icu_master(LogicalUnitID),
                 FOREIGN KEY (ORStatus) REFERENCES orstatus_master(ORStatusID)
                 );
+            
+            CREATE TABLE IF NOT EXISTS g_constent(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                PatientID INTEGER, 
+                TimeStamp TEXT, 
+                TextID INTEGER, 
+                FOREIGN KEY (PatientID) REFERENCES patients(PatientID),
+                FOREIGN KEY (TextID) REFERENCES g_consent_,aster(TextID)
+                FOREIGN KEY (
             
             CREATE TABLE IF NOT EXISTS gcs_score (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

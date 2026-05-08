@@ -25,12 +25,7 @@ class TBIConnection:
     username = os.getenv("DB_USERNAME")
     password = os.getenv("DB_PASSWORD")
 
-    sql_consent = '''
-        SELECT DISTINCT PatientID
-        FROM dbo.FactSignal
-        WHERE (ParameterID = 10480 AND TextID IN (1))
-            OR (ParameterID = 25583 AND TextID IN (2, 4))
-    '''
+
     sql_ifi = """
         SELECT DISTINCT PatientID
         FROM dbo.DimPatient
@@ -47,8 +42,10 @@ class TBIConnection:
     sql_icu_master = """SELECT DISTINCT LogicalUnitID, LogicalUnitName AS Text FROM DimLogicalUnit
                         WHERE LogicalUnitID IN (1, 46, 48, 49, 50, 51, 68, 69)"""
 
-    sql_gender = """SELECT PatientID, Text, TextID FROM dbo.FactSignal WHERE ParameterID = 3747"""
     sql_gcs = """SELECT PatientID, TimeStamp, Value FROM dbo.FactSignal WHERE ParameterID = 13736"""
+    sql_g_consent = """SELECT PatientID, TimeStamp, Text, TextID FROM dbo.FactSignal WHERE ParameterID = 10480"""
+    sql_ifi_consent = """SELECT PatientID, TimeStamp, Text FROM dbo.FactSignal WHERE ParameterID = 25583"""
+
     sql_patient = """
         SELECT
             PatientID,
