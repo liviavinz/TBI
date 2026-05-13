@@ -1,190 +1,190 @@
 """
-This script syncs data from the SQL Server to the TBI SQLite database.
+Syncs data from SQL Server to the local SQLite database.
+
+The logic is schema-driven: for each transactional entity in schema.py,
+this script picks the right strategy (full reload vs incremental) and
+the right conflict behavior (ignore vs update) based on entity fields.
+
+To add a new synced table, edit schema.py only.
 """
 from datetime import datetime, timedelta
+import decimal
 import pandas as pd
 
 from connection_tbi import TBIConnection
+from schema import Entity, transactional_entities
 from sqlite_tbi import TBIDatabase
 
 
 class TBISync:
-
+    # When doing incremental sync, re-fetch a small overlap window
+    # to catch late-arriving rows from the source system.
     OVERLAP_MIN = 10
 
     def __init__(self):
         self.tbi_con = TBIConnection()
-        self.sql_db  = TBIDatabase()
-        self.conn    = None
-        self.cur     = None
+        self.sql_db = TBIDatabase()
+        self.conn = None
+        self.cur = None
 
-    # ── Sync state helpers ─────────────────────────────────────────────────
-    def _get_last_synced(self, query_name):
+    # -- sync_state helpers --------------------------------------------------
+
+    def _get_last_synced(self, entity_name: str) -> str | None:
         self.cur.execute(
             "SELECT last_synced_at FROM sync_state WHERE query_name = ?",
-            (query_name,),
+            (entity_name,),
         )
         row = self.cur.fetchone()
         return row[0] if row else None
 
-    def _set_last_synced(self, query_name, timestamp):
-        self.cur.execute("""
+    def _set_last_synced(self, entity_name: str, timestamp: str) -> None:
+        self.cur.execute(
+            """
             INSERT INTO sync_state (query_name, last_synced_at) VALUES (?, ?)
             ON CONFLICT(query_name) DO UPDATE SET last_synced_at = excluded.last_synced_at
-        """, (query_name, timestamp))
-
-    def _fetch_incremental(self, sql, query_name, patient_ids):
-        last_synced = self._get_last_synced(query_name)
-        if last_synced:
-            cutoff = datetime.fromisoformat(last_synced) - timedelta(minutes=self.OVERLAP_MIN)
-            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
-            # Subquery wrap: works regardless of WHERE/OR in original query
-            sql = f"SELECT * FROM ({sql}) AS sub WHERE TimeStamp > '{cutoff_str}'"
-            print(f"  [{query_name}] incremental since {cutoff}")
-        else:
-            print(f"  [{query_name}] first run — full load")
-        result = self.tbi_con.get_data(sql, patient_ids=patient_ids)
-        return result if result is not None else pd.DataFrame()
-
-    # ── Step 1: filter patients ────────────────────────────────────────────
-    def _get_filtered_patient_ids(self):
-        print("\nSTEP 1: loading consent + IFI + TBI patients...")
-        df_consent = self.tbi_con.get_data(TBIConnection.sql_consent)
-        if df_consent is None or df_consent.empty:
-            print("No consented patients found. Stopping sync.")
-            return None
-        df_ifi = self.tbi_con.get_data(TBIConnection.sql_ifi)
-        if df_ifi is None or df_ifi.empty:
-            print("No IFI patients found. Stopping sync.")
-            return None
-        df_tbi = self.tbi_con.get_data(TBIConnection.sql_tbi)
-        if df_tbi is None or df_tbi.empty:
-            print("No TBI patients found. Stopping sync.")
-            return None
-        ids = list(
-            set(df_consent['PatientID'].tolist()) &
-            set(df_ifi['PatientID'].tolist()) &
-            set(df_tbi['PatientID'].tolist())
+            """,
+            (entity_name, timestamp),
         )
-        print(f"  {len(ids)} patients with consent, IFI and TBI only")
-        return ids
 
-    # ── Step 2: connect to SQLite ──────────────────────────────────────────
-    def _connect_sqlite(self):
+    # -- Fetching ------------------------------------------------------------
+
+    def _fetch(self, entity: Entity, patient_ids: set[int]) -> pd.DataFrame:
+        """Fetch one entity, applying incremental cutoff if configured."""
+        if entity.incremental_column is None:
+            print(f"  [{entity.name}] full reload")
+            df = self.tbi_con.fetch(entity, patient_ids=patient_ids)
+            return df if df is not None else pd.DataFrame()
+
+        # Incremental: ask only for rows newer than last sync (with overlap)
+        last = self._get_last_synced(entity.name)
+        sql = entity.source_query
+        if last:
+            cutoff = datetime.fromisoformat(last) - timedelta(minutes=self.OVERLAP_MIN)
+            cutoff_str = cutoff.strftime("%Y-%m-%d %H:%M:%S")
+            sql = (
+                f"SELECT * FROM ({sql}) AS sub "
+                f"WHERE {entity.incremental_column} > '{cutoff_str}'"
+            )
+            print(f"  [{entity.name}] incremental since {cutoff}")
+        else:
+            print(f"  [{entity.name}] first run — full load")
+
+        df = self.tbi_con.get_data(sql, patient_ids=patient_ids)
+        if df is None:
+            return pd.DataFrame()
+        # Apply column rename so the DataFrame matches the SQLite schema
+        if entity.column_map:
+            df = df.rename(columns=entity.column_map)
+        return df
+
+    # -- Inserting -----------------------------------------------------------
+
+    @staticmethod
+    def _insert_columns(entity: Entity) -> list[str]:
+        """Columns to INSERT into — skip AUTOINCREMENT id columns."""
+        return [
+            name for name, typ in entity.columns.items()
+            if "AUTOINCREMENT" not in typ.upper()
+        ]
+
+    @staticmethod
+    def _build_insert_sql(entity: Entity) -> str:
+        """Build the right INSERT statement for the entity's on_conflict mode."""
+        cols = TBISync._insert_columns(entity)
+        col_list = ",".join(cols)
+        placeholders = ",".join("?" * len(cols))
+
+        if entity.on_conflict == "ignore":
+            return (
+                f"INSERT OR IGNORE INTO {entity.sqlite_table} "
+                f"({col_list}) VALUES ({placeholders})"
+            )
+
+        if entity.on_conflict == "update":
+            # Conflict target = the columns of the entity's first unique index.
+            # That's the natural key (e.g. (PatientID, AdmissionDate)).
+            if not entity.unique_indexes:
+                raise ValueError(
+                    f"{entity.name}: on_conflict='update' requires a unique_indexes entry"
+                )
+            conflict_cols = ",".join(entity.unique_indexes[0])
+            update_cols = [c for c in cols if c not in entity.unique_indexes[0]]
+            update_clause = ",".join(f"{c}=excluded.{c}" for c in update_cols)
+            return (
+                f"INSERT INTO {entity.sqlite_table} ({col_list}) VALUES ({placeholders}) "
+                f"ON CONFLICT({conflict_cols}) DO UPDATE SET {update_clause}"
+            )
+
+        raise ValueError(f"{entity.name}: unknown on_conflict mode {entity.on_conflict!r}")
+
+    def _upsert(self, entity: Entity, df: pd.DataFrame) -> int:
+        """Insert/update a DataFrame's rows into the entity's SQLite table."""
+        if df.empty:
+            return 0
+        cols = self._insert_columns(entity)
+        # Keep only the columns we insert, in declared order; missing ones → NaN
+        df = df.reindex(columns=cols)
+        # Convert NaN → None so SQLite stores NULL instead of the string "nan"
+        import decimal
+
+        def _coerce(v):
+            if pd.isna(v):
+                return None
+            if isinstance(v, pd.Timestamp):
+                return v.strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(v, decimal.Decimal):
+                return int(v) if v == v.to_integral_value() else float(v)
+            return v
+
+        rows = [tuple(_coerce(v) for v in row)
+                for row in df.itertuples(index=False, name=None)]
+
+        sql = self._build_insert_sql(entity)
+        self.cur.executemany(sql, rows)
+        return self.cur.rowcount  # for INSERT OR IGNORE: count of new rows
+
+    # -- Per-entity sync -----------------------------------------------------
+
+    def _sync_entity(self, entity: Entity, cohort: set[int]) -> None:
+        df = self._fetch(entity, patient_ids=cohort)
+        n = self._upsert(entity, df)
+        self.conn.commit()
+        print(f"  [{entity.name}] {len(df)} fetched, {n} inserted/updated")
+
+        # Advance the sync cursor for incremental entities
+        if entity.incremental_column is not None:
+            if not df.empty and entity.incremental_column in df.columns:
+                new_cursor = str(df[entity.incremental_column].max())
+            else:
+                # No new rows — advance to now() so we don't re-scan the same window
+                new_cursor = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._set_last_synced(entity.name, new_cursor)
+            self.conn.commit()
+            print(f"  [{entity.name}] sync cursor → {new_cursor}")
+
+    # -- Main run ------------------------------------------------------------
+
+    def run(self) -> None:
+        print("\nSTEP 1: computing cohort...")
+        cohort = self.tbi_con.get_cohort()
+        if not cohort:
+            print("Empty cohort — nothing to sync.")
+            return
+
         print("\nSTEP 2: connecting to SQLite...")
         self.conn = self.sql_db.get_connection()
-        self.cur  = self.conn.cursor()
-        print("  SQLite ready")
+        self.cur = self.conn.cursor()
 
-    # ── Step 3: insert patients & upsert admissions ───────────────────────
-    def _insert_patients(self, patient_ids):
-        print("\nSTEP 3: inserting patients & admissions...")
-        df_patient = self.tbi_con.get_data(TBIConnection.sql_patient)
-        df_gender  = self.tbi_con.get_data(TBIConnection.sql_gender)
-
-        df_patient = df_patient[df_patient['PatientID'].isin(patient_ids)]
-
-        df_gender_filtered = (
-            df_gender[df_gender['PatientID'].isin(patient_ids)]
-            .drop_duplicates(subset='PatientID', keep='last')
-        )
-        df_patient = df_patient.merge(
-            df_gender_filtered[['PatientID', 'TextID']].rename(columns={'TextID': 'gender_TextID'}),
-            on='PatientID',
-            how='left',
-        )
-
-        new_patient_count        = 0
-        upserted_admission_count = 0
-
-        for _, row in df_patient.iterrows():
-            patient_id    = row['PatientID']
-            birthdate     = str(row['BirthDate'])        if pd.notna(row['BirthDate'])        else None
-            gender        = int(row['gender_TextID'])    if pd.notna(row['gender_TextID'])    else None
-            ssn           = str(row['SocialSecurity'])   if pd.notna(row['SocialSecurity'])   else None
-            adm_date      = str(row['AddmissionDate'])   if pd.notna(row['AddmissionDate'])   else None
-            logical       = int(row['LogicalUnitID'])    if pd.notna(row['LogicalUnitID'])    else None
-            or_status     = int(row['ORStatus'])         if pd.notna(row['ORStatus'])         else None
-            bed_id        = int(row['BedID'])            if pd.notna(row['BedID'])            else None
-            last_name     = str(row['LastName'])         if pd.notna(row['LastName'])         else None
-            first_name    = str(row['FirstName'])        if pd.notna(row['FirstName'])        else None
-            location_from = str(row['LocationFromTime']) if pd.notna(row['LocationFromTime']) else None
-
-            # patients: stays the same → INSERT OR IGNORE
-            self.cur.execute("""
-                INSERT OR IGNORE INTO patients
-                    (PatientID, BirthDate, LastName, FirstName, gender_TextID)
-                VALUES (?, ?, ?, ?, ?)
-            """, (patient_id, birthdate, last_name, first_name, gender))
-            if self.cur.rowcount > 0:
-                new_patient_count += 1
-
-            # admissions: location can change → UPSERT (insert or update on conflict)
-            self.cur.execute("""
-                INSERT INTO admissions
-                    (PatientID, SocialSecurity, AdmissionDate,
-                     LogicalUnitID, BedID, ORStatus, LocationFromTime)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(PatientID, AdmissionDate) DO UPDATE SET
-                    SocialSecurity   = excluded.SocialSecurity,
-                    LogicalUnitID    = excluded.LogicalUnitID,
-                    BedID            = excluded.BedID,
-                    ORStatus         = excluded.ORStatus,
-                    LocationFromTime = excluded.LocationFromTime
-            """, (patient_id, ssn, adm_date, logical, bed_id, or_status, location_from))
-            upserted_admission_count += 1
-
-        self.conn.commit()
-        print(f"  {len(df_patient)} patient rows processed")
-        print(f"  {new_patient_count} new patients inserted")
-        print(f"  {upserted_admission_count} admissions upserted")
-
-    # ── Steps 4-6: transactional data (GCS) ───────────────────────────────
-    def _sync_gcs(self, patient_ids):
-        print("\nSTEP 4: fetching GCS data...")
-        df_gcs = self._fetch_incremental(TBIConnection.sql_gcs, "gcs", patient_ids)
-        print(f"  → gcs rows fetched: {len(df_gcs)}")
-
-        print("\nSTEP 5: inserting GCS data...")
-        inserted_gcs = 0
-        for _, row in df_gcs.iterrows():
-            self.cur.execute("""
-                INSERT OR IGNORE INTO gcs_score (PatientID, TimeStamp, Value)
-                VALUES (?, ?, ?)
-            """, (
-                row['PatientID'],
-                str(row['TimeStamp']),
-                None if pd.isna(row['Value']) else int(float(row['Value'])),
-            ))
-            inserted_gcs += self.cur.rowcount
-        print(f"  → {inserted_gcs} new gcs rows inserted")
-        self.conn.commit()
-
-        print("\nSTEP 6: updating sync state...")
-        if not df_gcs.empty:
-            self._set_last_synced("gcs", str(df_gcs['TimeStamp'].max()))
-            print(f"  gcs synced to {df_gcs['TimeStamp'].max()}")
-        else:
-            # advance cursor anyway to avoid re-querying the same empty range
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._set_last_synced("gcs", now_str)
-            print(f"  no new gcs rows, advanced cursor to {now_str}")
-        self.conn.commit()
-
-    # ── Main run ───────────────────────────────────────────────────────────
-    def run(self):
-        patient_ids = self._get_filtered_patient_ids()
-        if patient_ids is None:
-            return
-        self._connect_sqlite()
         try:
-            self._insert_patients(patient_ids)
-            self._sync_gcs(patient_ids)
+            print("\nSTEP 3: syncing transactional entities...")
+            for entity in transactional_entities():
+                self._sync_entity(entity, cohort)
         finally:
             self.conn.close()
-        print("\nSync done")
+
+        print("\nSync done.")
 
 
 if __name__ == "__main__":
-    sync = TBISync()
-    sync.run()
+    TBISync().run()
+

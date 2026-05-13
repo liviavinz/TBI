@@ -41,30 +41,24 @@ EXCLUDED_KPI_STYLE = {**KPI_STYLE, "background": "#ffe5e5"}
 # ── App ───────────────────────────────────────────────────────────────────────
 app = Dash(__name__)
 
-
 # ── Column definitions ────────────────────────────────────────────────────────
 PATIENT_COLDEFS = [
-    {"headerName": "Intensivstation", "field": "ICU",             "filter": "agTextColumnFilter"},
-    {"headerName": "Nachname",        "field": "LastName",        "filter": "agTextColumnFilter"},
-    {"headerName": "Vorname",         "field": "FirstName",       "filter": "agTextColumnFilter"},
-    {"headerName": "Fallnummer", "field": "SocialSecurity", "filter": "agTextColumnFilter"},
-    {"headerName": "Bett ID", "field": "BedID", "filter": "agTextColumnFilter"},
-    {"headerName": "Status", "field": "Status", "filter": "agTextColumnFilter"},
-
-    {"headerName": "Patienten ID", "field": "PatientID", "filter": "agTextColumnFilter"},
     {
-        "headerName": "Alter",
-        "field": "Age",
-        "filter": "agNumberColumnFilter",
+        "headerName": "Eintrittsdatum",
+        "field": "AdmissionDate",  # ISO for filtering
+        "valueFormatter": {"function": "params.data.AdmissionDate_display || ''"},  # Swiss for display
+        "filter": "agDateColumnFilter",
+        "floatingFilterComponentParams": {"suppressFilterButton": True},
         "filterParams": {
-            "defaultOption": "equals",
-            "filterOptions": ["equals", "notEqual", "lessThan", "lessThanOrEqual",
-                              "greaterThan", "greaterThanOrEqual", "inRange"],
+            "browserDatePicker": True,
+            "defaultOption": "greaterThan",
+            "filterOptions": ["greaterThan"],
         },
     },
-    {"headerName": "Geschlecht", "field": "Gender", "filter": "agTextColumnFilter"},
-    {"headerName": "GCS (aktuell)", "field": "gcs_display", "filter": "agTextColumnFilter"},
-
+    {"headerName": "Nachname",        "field": "LastName",       "filter": "agTextColumnFilter"},
+    {"headerName": "Vorname",         "field": "FirstName",      "filter": "agTextColumnFilter"},
+    {"headerName": "General Consent", "field": "ConsentGeneral", "filter": "agTextColumnFilter"},
+    {"headerName": "IFI Consent",     "field": "ConsentIFI",     "filter": "agTextColumnFilter"},
     {
         "headerName": "Registriert",
         "field": "Registered",
@@ -75,6 +69,22 @@ PATIENT_COLDEFS = [
         "cellStyle": {"cursor": "pointer"},
         "pinned": "right",
     },
+    {"headerName": "Intensivstation", "field": "ICU", "filter": "agTextColumnFilter"},
+    {"headerName": "Bett ID",         "field": "BedID",          "filter": "agTextColumnFilter"},
+    {"headerName": "Status",          "field": "Status",         "filter": "agTextColumnFilter"},
+    {"headerName": "Fallnummer", "field": "SocialSecurity", "filter": "agTextColumnFilter"},
+    {"headerName": "Patienten ID",    "field": "PatientID",      "filter": "agTextColumnFilter"},
+    {
+        "headerName": "Alter",
+        "field": "Age",
+        "filter": "agNumberColumnFilter",
+        "filterParams": {
+            "defaultOption": "equals",
+            "filterOptions": ["equals", "notEqual", "lessThan", "lessThanOrEqual",
+                              "greaterThan", "greaterThanOrEqual", "inRange"],
+        },
+    },
+    {"headerName": "GCS (aktuell)",   "field": "gcs_display",    "filter": "agTextColumnFilter"},
 ]
 
 DECIDED_COLDEFS = [
@@ -115,7 +125,7 @@ def serve_layout():
 
             dcc.Interval(
                 id="data-refresh-interval",
-                interval=30 * 1000,
+                interval=15* 60 * 1000,
                 n_intervals=0,
             ),
 
@@ -163,6 +173,7 @@ def serve_layout():
                 id="pending-table",
                 rowData=pending_data,
                 columnDefs=PATIENT_COLDEFS,
+                dangerously_allow_code=True,
                 defaultColDef={
                     "sortable": True, "resizable": True, "floatingFilter": True, "filter": True,
                     "filterParams": {"defaultOption": "startsWith", "filterOptions": ["startsWith"]},
@@ -289,5 +300,3 @@ def save_registered(pending_changed, included_changed, excluded_changed, current
     return reg
 
 
-if __name__ == "__main__":
-    app.run(debug=False, use_reloader=False, host="0.0.0.0", port=8051)

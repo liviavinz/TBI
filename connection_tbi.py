@@ -1,65 +1,31 @@
 """
-This script contains the connection to the SQL Live-Database and all SQL-Queries for TBI
+Connection to the SQL Live-Database for TBI.
+
+This module is a pure data access layer:
+  - builds the ODBC connection string from environment variables
+  - converts SQL Server's datetimeoffset to Python datetime
+  - runs queries and returns DataFrames
+
+It does NOT know which queries exist — those live in schema.py.
+To fetch an entity, pass the Entity object (or its source_query) to get_data().
 """
-import pyodbc
-import pandas as pd
 import os
 import struct
 from datetime import datetime
-from tabulate import tabulate
+
+import pandas as pd
+import pyodbc
 from dotenv import load_dotenv
+
+from schema import Entity, filter_entities
 
 load_dotenv()
 
 class TBIConnection:
-    """
-    - Server Information
-    - SQL Queries:
-        - predefine consent, IFI and TBI only
-        - master data (gender, icu)
-        - transactional data (gender, gcs, patient data)
-    - Functions to make connection and load data
-    """
     server = os.getenv("DB_SERVER")
     database = os.getenv("DB_DATABASE")
     username = os.getenv("DB_USERNAME")
     password = os.getenv("DB_PASSWORD")
-
-
-    sql_ifi = """
-        SELECT DISTINCT PatientID
-        FROM dbo.DimPatient
-        WHERE LogicalUnitID IN (1, 46, 48, 49, 50, 51, 68, 69)
-    """
-    sql_tbi = """
-        SELECT DISTINCT PatientID
-        FROM dbo.FactSignal
-        WHERE ParameterID = 25671
-        AND TextID = 1
-    """
-
-    sql_gender_master = """SELECT DISTINCT TextID, Text FROM DimParametersText WHERE ParameterID = 3747"""
-    sql_icu_master = """SELECT DISTINCT LogicalUnitID, LogicalUnitName AS Text FROM DimLogicalUnit
-                        WHERE LogicalUnitID IN (1, 46, 48, 49, 50, 51, 68, 69)"""
-
-    sql_gcs = """SELECT PatientID, TimeStamp, Value FROM dbo.FactSignal WHERE ParameterID = 13736"""
-    sql_g_consent = """SELECT PatientID, TimeStamp, Text, TextID FROM dbo.FactSignal WHERE ParameterID = 10480"""
-    sql_ifi_consent = """SELECT PatientID, TimeStamp, Text FROM dbo.FactSignal WHERE ParameterID = 25583"""
-
-    sql_patient = """
-        SELECT
-            PatientID,
-            SocialSecurity,
-            AddmissionDate,
-            LogicalUnitID,
-            ORStatus,
-            BedID,
-            BirthDate,
-            LastName,
-            FirstName,
-            LocationFromTime
-        FROM dbo.DimPatient
-    """
 
     def __init__(self):
         self.connection_string = (
@@ -94,24 +60,20 @@ class TBIConnection:
             print(f"Database connection error: {e}")
             return None
 
-    def get_data(self, query, patient_ids=None):
+    def get_data(self, query: str, patient_ids=None) -> pd.DataFrame | None:
         """
-        Execute SQL query and return results as a DataFrame
-        :param query: SQL query string
-        :param patient_ids: iterable of PatientIDs to filter by
-        :return: pandas DataFrame or None on failure
+        Execute a SQL query and return the results as a DataFrame.
+        If patient_ids is given, wrap the query and restrict to those IDs.
         """
         conn = self.get_connection()
         if conn is None:
             return None
         try:
-            if patient_ids:
+            if patient_ids is not None:
                 ids = [int(pid) for pid in patient_ids]
                 if not ids:
                     return pd.DataFrame()
-
                 placeholders = ','.join(str(pid) for pid in ids)
-
                 query = f"SELECT * FROM ({query}) AS sub WHERE PatientID IN ({placeholders})"
 
             cursor = conn.cursor()
@@ -125,5 +87,37 @@ class TBIConnection:
             return None
         finally:
             conn.close()
+
+    def fetch(self, entity: Entity, patient_ids=None) -> pd.DataFrame | None:
+        """
+        Fetch the rows for a schema Entity from SQL Server.
+        Applies the entity's column_map so the returned DataFrame already
+        uses the SQLite column names.
+        """
+        if entity.source_query is None:
+            raise ValueError(f"Entity '{entity.name}' has no source_query")
+        df = self.get_data(entity.source_query, patient_ids=patient_ids)
+        if df is not None and entity.column_map:
+            df = df.rename(columns=entity.column_map)
+        return df
+
+    def get_cohort(self) -> set[int]:
+        """
+        Run every filter in schema.filter_entities() and return the
+        intersection of their PatientID sets. This is the cohort that
+        every transactional sync should be restricted to.
+        """
+        cohort: set[int] | None = None
+        for f in filter_entities():
+            df = self.get_data(f.source_query)
+            if df is None:
+                print(f"  [cohort] filter '{f.name}' failed; skipping")
+                continue
+            ids = set(int(pid) for pid in df["PatientID"])
+            print(f"  [cohort] {f.name}: {len(ids)} patients")
+            cohort = ids if cohort is None else cohort & ids
+        result = cohort or set()
+        print(f"  [cohort] final: {len(result)} patients")
+        return result
 
 

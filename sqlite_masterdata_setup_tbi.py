@@ -1,84 +1,95 @@
 """
-This script sets up and fills the master tables for the TBI database.
-Run this script only once!
-"""
+Sets up and fills the master (lookup) tables for the TBI database.
 
+Run this script ONCE after creating the SQLite database.
+
+It loops over schema.master_entities() and dispatches on entity.kind:
+  - master_from_sql -> fetched from SQL Server via TBIConnection
+  - master_static   -> hardcoded rows in schema.py
+"""
 import pandas as pd
 from tabulate import tabulate
 
 from connection_tbi import TBIConnection
+from schema import Entity, master_entities
 from sqlite_tbi import TBIDatabase
 
+
 class TBIMasterSetup:
-
-    _ORSTATUS_DATA = [
-        (1, 'Geplante Aufnahme'),
-        (2, 'Aufnahme'),
-        (4, 'Anaesthesie'),
-        (6, 'Verfügbar'),
-        (7, 'Geschlossen')
-    ]
-
     def __init__(self):
-        self.sql_db  = TBIDatabase()
+        self.sql_db = TBIDatabase()
         self.tbi_con = TBIConnection()
 
+    # -- Filling -------------------------------------------------------------
+
+    def _rows_for(self, entity: Entity) -> list[tuple] | None:
+        """Return the rows to insert for a master entity, or None on failure."""
+        if entity.kind == "master_static":
+            return entity.static_data or []
+
+        if entity.kind == "master_from_sql":
+            df = self.tbi_con.fetch(entity)
+            if df is None:
+                return None
+            # Keep only the columns this entity declares, in declared order
+            cols = list(entity.columns.keys())
+            df = df[cols]
+            return df.to_records(index=False).tolist()
+
+        raise ValueError(f"_rows_for called on non-master entity: {entity.name}")
+
     def fill_master_tables(self):
-        master_tables = {
-            "gender_master": TBIConnection.sql_gender_master,
-            "icu_master":    TBIConnection.sql_icu_master,
-        }
         with self.sql_db.get_connection() as conn:
             cur = conn.cursor()
-            for table_name, query in master_tables.items():
-                df = self.tbi_con.get_data(query)
-                if df is not None and not df.empty:
-                    cols = list(df.columns)
-                    placeholders = ','.join('?' * len(cols))
-                    col_list = ','.join(cols)
-                    sql = f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})"
-                    cur.executemany(sql, df.to_records(index=False).tolist())
-                    conn.commit()
-                    print(f"  {table_name}: {len(df)} rows upserted")
-                else:
-                    print(f"  {table_name}: no data returned")
+            for entity in master_entities():
+                rows = self._rows_for(entity)
+                if rows is None:
+                    print(f"  {entity.name}: query failed")
+                    continue
+                if not rows:
+                    print(f"  {entity.name}: no data")
+                    continue
 
-    def fill_orstatus_master(self):
-        with self.sql_db.get_connection() as conn:
-            conn.executemany(
-                "INSERT OR REPLACE INTO orstatus_master (ORStatusID, Text) VALUES (?, ?)",
-                self._ORSTATUS_DATA,
-            )
-        print(f"  orstatus_master: {len(self._ORSTATUS_DATA)} rows inserted")
+                cols = list(entity.columns.keys())
+                col_list = ",".join(cols)
+                placeholders = ",".join("?" * len(cols))
+                sql = (
+                    f"INSERT OR REPLACE INTO {entity.sqlite_table} "
+                    f"({col_list}) VALUES ({placeholders})"
+                )
+                cur.executemany(sql, rows)
+                conn.commit()
+                print(f"  {entity.name}: {len(rows)} rows upserted")
+
+    # -- Inspection ----------------------------------------------------------
 
     def show_tables(self):
         with self.sql_db.get_connection() as conn:
             cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            tables = cur.fetchall()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
             print("\nTable overview:")
-            for (table_name,) in tables:
+            for (table_name,) in cur.fetchall():
+                if table_name.startswith("sqlite_"):
+                    continue
                 cur.execute(f"SELECT COUNT(*) FROM {table_name}")
-                count = cur.fetchone()[0]
-                print(f"  {table_name}: {count} rows")
+                print(f"  {table_name}: {cur.fetchone()[0]} rows")
 
-    def show_table_data(self, table_name):
+    def show_table_data(self, table_name: str):
         with self.sql_db.get_connection() as conn:
             df = pd.read_sql(f"SELECT * FROM {table_name}", conn)
         print(f"\n--- {table_name} ---")
-        print(tabulate(df, headers='keys', tablefmt='pretty', showindex=False))
+        print(tabulate(df, headers="keys", tablefmt="pretty", showindex=False))
+
+    # -- Run -----------------------------------------------------------------
 
     def run(self):
         self.sql_db.create_tables()
         self.fill_master_tables()
-        self.fill_orstatus_master()
         self.show_tables()
-        self.show_table_data("gender_master")
-        self.show_table_data("icu_master")
-        self.show_table_data("orstatus_master")
+        for entity in master_entities():
+            self.show_table_data(entity.sqlite_table)
         print("\nMaster data setup complete — run this script only once!")
 
 
 if __name__ == "__main__":
-    setup = TBIMasterSetup()
-    setup.run()
+    TBIMasterSetup().run()

@@ -23,5 +23,5 @@ if __name__ == "__main__":
     dashboard_tbi.register = TBIRegister(db)
 
     # 3. Start dashboard
-    print("Starting dashboard on http://localhost:8051")
-    app.run(debug=True, use_reloader=False, port=8051)
+    print("Starting dashboard on http://localhost:8052")
+    app.run(debug=True, use_reloader=False, port=8052)
