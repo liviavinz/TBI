@@ -4,3 +4,4 @@ pandas
 pyodbc
 python-dotenv
 tabulate
+dataclasses

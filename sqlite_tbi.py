@@ -26,6 +26,7 @@ class TBIDatabase:
         Path(self.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.DB_PATH)
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA journal_mode = WAL")
         return conn
 
     # -- DDL generation ------------------------------------------------------

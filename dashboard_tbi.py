@@ -299,4 +299,5 @@ def save_registered(pending_changed, included_changed, excluded_changed, current
     register.save(reg)
     return reg
 
-
+if __name__ == "__main__":
+    app.run(debug=False, use_reloader=False, host="0.0.0.0", port=8051)
